@@ -1,0 +1,13 @@
+# Compiled binary
+honeypot/honeypot
+
+# Live log data (grows continuously; not meant to be version-controlled)
+honeypot/honeypot.log
+
+# GeoLite2 database - MaxMind's license restricts redistribution;
+# each user should download their own free copy (see README)
+honeypot/GeoLite2-City.mmdb
+
+# Go build cache (if present locally)
+*.test
+*.out
