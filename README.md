@@ -32,6 +32,7 @@ Everything runs inside a single Ubuntu Server 24.04 LTS VM (VirtualBox), which s
 - **Fake SSH server** (Go, [`gliderlabs/ssh`](https://github.com/gliderlabs/ssh)) — accepts any username/password combination for the attempt, but the password handler always returns `false`, so no login ever actually succeeds
 - **Structured JSON logging** — every attempt logged with timestamp, source IP, username, password
 - **GeoIP enrichment** (MaxMind GeoLite2 via [`oschwald/geoip2-golang`](https://github.com/oschwald/geoip2-golang)) — country, city, latitude/longitude added per attempt when available
+- **Real attacker IP preservation through the tunnel** (HAProxy PROXY protocol via [`pires/go-proxyproto`](https://github.com/pires/go-proxyproto)) — without this, every connection through a reverse tunnel would appear to originate from `127.0.0.1`, silently breaking GeoIP for all tunneled traffic
 - **Full Elastic Stack pipeline** (Docker Compose) — Filebeat tails the log, ships to Elasticsearch, visualized in Kibana
 - **Live on the real internet** via an auto-reconnecting Pinggy tunnel, not just local testing
 
@@ -39,7 +40,7 @@ Everything runs inside a single Ubuntu Server 24.04 LTS VM (VirtualBox), which s
 
 | Component | Choice |
 |---|---|
-| Honeypot | Go, `gliderlabs/ssh`, `oschwald/geoip2-golang` |
+| Honeypot | Go, `gliderlabs/ssh`, `oschwald/geoip2-golang`, `pires/go-proxyproto` |
 | GeoIP data | MaxMind GeoLite2 City (free tier) |
 | Log shipping | Filebeat 8.15.3 (`filestream` input + `ndjson` parser) |
 | Storage & search | Elasticsearch 8.15.3 |
@@ -63,8 +64,6 @@ Everything runs inside a single Ubuntu Server 24.04 LTS VM (VirtualBox), which s
 ├── img/                   # Proof-of-concept screenshots (see below)
 └── README.md
 ```
-
-> **Note:** the compiled `honeypot` binary and `honeypot.log` shouldn't really be committed — they're a build artifact and a live-growing log file respectively. Worth adding a `.gitignore` (see suggestion at the bottom) and removing them from tracking with `git rm --cached honeypot honeypot.log`. If you want to showcase real captured data, consider committing a small hand-picked excerpt as `sample-data.json` instead of the live log itself.
 
 ## Demo
 
@@ -122,7 +121,7 @@ cd honeypot
 ./run-tunnel.sh
 ```
 
-Prints a public `tcp://<random>.pinggy-free.link:<port>` address that forwards straight to the honeypot. Free-tier Pinggy sessions expire after ~60 minutes; the script auto-reconnects.
+Prints a public `tcp://<random>.pinggy-free.link:<port>` address that forwards straight to the honeypot. Free-tier Pinggy sessions expire after ~60 minutes; the script auto-reconnects. The tunnel runs in `tcp+x:haproxy` mode, which makes Pinggy prepend a PROXY protocol header carrying the real client IP — the honeypot's listener parses this transparently (see Issues below for why this matters).
 
 ## The build process
 
@@ -137,7 +136,7 @@ Prints a public `tcp://<random>.pinggy-free.link:<port>` address that forwards s
 
 ## Issues encountered along the way
 
-Documenting these because the debugging was as much a part of the learning as the build itself.
+The issues I have faced along the way:
 
 - **VirtualBox shared folder wouldn't mount** — the `vboxsf` kernel module hadn't built correctly during the Guest Additions install; fixed by installing `linux-headers` for the running kernel and re-running `/sbin/rcvboxadd setup`.
 - **Missed the SSH setup step during Ubuntu install** — OpenSSH server wasn't installed; had to add it manually afterward (`apt install openssh-server`).
@@ -150,11 +149,13 @@ Documenting these because the debugging was as much a part of the learning as th
 - **`docker compose logs filebeat` always showed nothing**, even while working correctly — Filebeat's official image logs to internal files by default, not stdout. Not a bug; just a quirk of that image.
 - **Pinggy's free tier prompted for an SSH password** despite being a "no auth" tunnel service — a known quirk documented by Pinggy; entering any string works, but for an unattended auto-reconnect script the real fix is generating a local SSH keypair (`ssh-keygen`), which stops the prompt entirely.
 - **Pinggy free-tier tunnels expire every ~60 minutes** — solved with a small bash wrapper that loops and reconnects automatically.
+- **Reverse tunnels silently discard the real attacker IP by default** — a plain `ssh -R` tunnel relays each incoming connection as a *new local connection from the tunnel client itself*, so the honeypot logged every tunneled attempt as `127.0.0.1` — meaning zero real GeoIP data despite the honeypot being "live." Caught by noticing `127.0.0.1` entries in the log that should have been external. Fixed on both ends: enabled Pinggy's `tcp+x:haproxy` PROXY protocol mode, and added a PROXY-protocol-aware listener (`pires/go-proxyproto`) in the Go code to parse the real IP out of the header. Verified by simulating a PROXY-protocol-prefixed connection with a spoofed IP and confirming it resolved to the correct GeoIP location. **Any data collected before this fix has no real attacker geolocation.**
 
 ## Honest caveats
 
 - Traffic arrives via a shared tunnel-provider IP rather than a dedicated public IP sitting still for weeks, so the volume and character of "organic internet noise" differs from the original blog's methodology — expect real attacker traffic, but likely lower volume than a persistent VPS would see.
 - The fake shell is currently shallow (login-attempt logging only, no post-auth interaction) since the honeypot never grants a session.
+- **GeoIP location reflects the connecting IP, not necessarily the attacker's real location.** Bots/attackers connecting through a VPN or proxy will resolve to that provider's exit server location instead — a fundamental limit of IP-based geolocation in general, not something fixable at the honeypot level. This likely skews results toward known hosting/VPN hubs (e.g. Netherlands, Germany, USA, Singapore) rather than attackers' true locations, though a meaningful share of real scanning traffic does genuinely originate from datacenters and compromised servers regardless.
 
 ## Possible future work
 
@@ -162,6 +163,7 @@ Documenting these because the debugging was as much a part of the learning as th
 - Kibana dashboards summarizing top attacker countries, most-attempted credentials, and attack timing patterns
 - Deeper fake-shell interaction to log post-connection behavior (though this honeypot only ever rejects auth, so this would be a design change)
 - Correlating observed IPs against public threat-intel feeds (e.g. AbuseIPDB)
+- ASN lookup (MaxMind GeoLite2-ASN) alongside city/country, to distinguish residential-ISP traffic from datacenter/hosting/VPN traffic even where the specific person can't be identified
 
 ## Credits
 
