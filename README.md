@@ -98,8 +98,6 @@ go build -o honeypot .
 
 Place `GeoLite2-City.mmdb` (downloaded from your MaxMind account) alongside the binary for GeoIP enrichment — it's optional; the honeypot runs fine without it and just skips geo fields.
 
-> **Licensing note:** MaxMind's GeoLite2 license generally restricts redistributing the raw database file itself — worth checking the current terms before committing `GeoLite2-City.mmdb` to a public repo. Safer to `.gitignore` it and just document that readers need to grab their own free copy (see Setup above).
-
 Environment variables:
 - `HONEYPOT_PORT` (default `2222`)
 - `HONEYPOT_LOG_PATH` (default `honeypot.log`)
