@@ -16,6 +16,7 @@ import (
 
 	"github.com/gliderlabs/ssh"
 	"github.com/oschwald/geoip2-golang"
+	"github.com/pires/go-proxyproto"
 )
 
 // LoginAttempt is the structure written to the log for every attempt.
@@ -158,10 +159,22 @@ func main() {
 	}
 
 	server := &ssh.Server{
-		Addr:            ":" + port,
 		PasswordHandler: passwordHandler,
 	}
 
+	rawListener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		log.Fatalf("failed to listen on port %s: %v", port, err)
+	}
+
+	// Wrap the raw listener so that if a connection arrives with a PROXY
+	// protocol header prepended (as Pinggy sends when started with
+	// x:haproxy), the real client IP is transparently extracted and
+	// used for RemoteAddr() instead of the tunnel's own loopback
+	// address. Connections without a PROXY header pass through
+	// unmodified, so this is safe for direct/local testing too.
+	proxyListener := &proxyproto.Listener{Listener: rawListener}
+
 	log.Printf("SSH honeypot listening on port %s, logging to %s", port, logPath)
-	log.Fatal(server.ListenAndServe())
+	log.Fatal(server.Serve(proxyListener))
 }
