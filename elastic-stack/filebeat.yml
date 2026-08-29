@@ -1,0 +1,19 @@
+filebeat.inputs:
+  - type: filestream
+    id: honeypot-log
+    enabled: true
+    paths:
+      - /var/log/honeypot/honeypot.log
+    parsers:
+      - ndjson:
+          target: ""
+          add_error_key: true
+          overwrite_keys: true
+
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+  index: "honeypot-%{+yyyy.MM.dd}"
+
+setup.template.name: "honeypot"
+setup.template.pattern: "honeypot-*"
+setup.ilm.enabled: false
